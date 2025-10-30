@@ -117,7 +117,7 @@ pub mod server;
 use body_encoder::BodyEncoder;
 #[cfg(feature = "client")]
 pub use client::connect;
-use futures_lite::io::Cursor;
+use futures::io::Cursor;
 #[cfg(feature = "server")]
 pub use server::{accept, accept_with_opts, ServerOptions};
 
