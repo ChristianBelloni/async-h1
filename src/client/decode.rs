@@ -105,7 +105,15 @@ where
 }
 
 /// Decode an HTTP response on the client.
-pub async fn decode_inner<'a, R>(reader: R) -> http_types::Result<(Response, impl Read + 'a)>
+pub async fn decode_inner<'a, R>(
+    reader: R,
+) -> http_types::Result<(
+    Response,
+    Either<
+        Either<BufReader<ChunkedDecoder<BufReader<R>>>, futures::io::Take<BufReader<R>>>,
+        futures::io::Empty,
+    >,
+)>
 where
     R: Read + Unpin + Send + Sync + 'a,
 {
@@ -176,7 +184,7 @@ where
             let trailers_sender = res.send_trailers();
             let reader = BufReader::new(ChunkedDecoder::new(reader, trailers_sender));
             // Return the response.
-            return Ok((res, Either::Left(reader)));
+            return Ok((res, Either::Left(Either::Left(reader))));
         }
     }
 
@@ -184,9 +192,9 @@ where
     if let Some(len) = content_length {
         let len = len.last().as_str().parse::<usize>()?;
 
-        Ok((res, Either::Right(Either::Left(reader.take(len as u64)))))
+        Ok((res, Either::Left(Either::Right(reader.take(len as u64)))))
     } else {
         // Return the response.
-        Ok((res, Either::Right(Either::Right(futures::io::empty()))))
+        Ok((res, Either::Right(futures::io::empty())))
     }
 }

@@ -31,7 +31,16 @@ where
 pub async fn connect2<'a, RW>(
     mut stream: RW,
     req: Request,
-) -> http_types::Result<(Response, impl Read + 'a)>
+) -> http_types::Result<(
+    Response,
+    futures::future::Either<
+        futures::future::Either<
+            io::BufReader<crate::chunked::ChunkedDecoder<io::BufReader<RW>>>,
+            io::Take<io::BufReader<RW>>,
+        >,
+        io::Empty,
+    >,
+)>
 where
     RW: Read + Write + Send + Sync + Unpin + 'a,
 {
