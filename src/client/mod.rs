@@ -42,7 +42,7 @@ pub async fn connect_custom_buf_reader<RW, B, K, M, F1, F2, F3>(
     buf_read_fn_3: F3,
 ) -> http_types::Result<Response>
 where
-    RW: AsyncBufRead + Write + Send + Sync + Unpin + 'static,
+    RW: Read + Write + Send + Sync + Unpin + 'static,
     B: AsyncBufRead + Send + Sync + 'static + Unpin,
     F1: Fn(Encoder) -> M,
     F2: Fn(RW) -> B,
