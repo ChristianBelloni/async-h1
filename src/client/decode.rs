@@ -105,18 +105,19 @@ where
 }
 
 /// Decode an HTTP response on the client.
-pub async fn decode_custom_buf_read<R, B, K, F>(
+pub async fn decode_custom_buf_read<R, B, K, F1, F2>(
     reader: R,
-    buf_read_fn: F,
+    buf_read_fn_1: F1,
+    buf_read_fn_2: F2,
 ) -> http_types::Result<Response>
 where
     R: Read + Unpin + Send + Sync + 'static,
     B: AsyncBufRead + Send + Sync + 'static + Unpin,
-    F: Fn(R) -> B,
-    F: Fn(ChunkedDecoder<B>) -> K,
+    F1: Fn(R) -> B,
+    F2: Fn(ChunkedDecoder<B>) -> K,
     K: Send + Sync + 'static + Unpin + AsyncBufRead,
 {
-    let mut reader = buf_read_fn(reader);
+    let mut reader = buf_read_fn_1(reader);
     let mut buf = Vec::new();
     let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
     let mut httparse_res = httparse::Response::new(&mut headers);
@@ -181,7 +182,7 @@ where
     if let Some(encoding) = transfer_encoding {
         if encoding.last().as_str() == "chunked" {
             let trailers_sender = res.send_trailers();
-            let reader = buf_read_fn(ChunkedDecoder::new(reader, trailers_sender));
+            let reader = buf_read_fn_2(ChunkedDecoder::new(reader, trailers_sender));
             res.set_body(Body::from_reader(reader, None));
 
             // Return the response.
