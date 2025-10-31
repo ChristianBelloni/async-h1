@@ -105,6 +105,101 @@ where
 }
 
 /// Decode an HTTP response on the client.
+pub async fn decode_custom_buf_read<R, B, K, F>(
+    reader: R,
+    buf_read_fn: F,
+) -> http_types::Result<Response>
+where
+    R: Read + Unpin + Send + Sync + 'static,
+    B: AsyncBufRead + Send + Sync + 'static + Unpin,
+    F: Fn(R) -> B,
+    F: Fn(ChunkedDecoder<B>) -> K,
+    K: Send + Sync + 'static + Unpin + AsyncBufRead,
+{
+    let mut reader = buf_read_fn(reader);
+    let mut buf = Vec::new();
+    let mut headers = [httparse::EMPTY_HEADER; MAX_HEADERS];
+    let mut httparse_res = httparse::Response::new(&mut headers);
+
+    // Keep reading bytes from the stream until we hit the end of the stream.
+    loop {
+        let bytes_read = reader.read_until(LF, &mut buf).await?;
+        // No more bytes are yielded from the stream.
+
+        match (bytes_read, buf.len()) {
+            (0, 0) => return Err(format_err!("connection closed")),
+            (0, _) => return Err(format_err!("empty response")),
+            _ => {}
+        }
+
+        // Prevent CWE-400 DDOS with large HTTP Headers.
+        ensure!(
+            buf.len() < MAX_HEAD_LENGTH,
+            "Head byte length should be less than 8kb"
+        );
+
+        // We've hit the end delimiter of the stream.
+        let idx = buf.len() - 1;
+        if idx >= 3 && buf[idx - 3..=idx] == [CR, LF, CR, LF] {
+            break;
+        }
+        if idx >= 1 && buf[idx - 1..=idx] == [LF, LF] {
+            break;
+        }
+    }
+
+    // Convert our header buf into an httparse instance, and validate.
+    let status = httparse_res.parse(&buf)?;
+    ensure!(!status.is_partial(), "Malformed HTTP head");
+
+    let code = httparse_res.code;
+    let code = code.ok_or_else(|| format_err!("No status code found"))?;
+
+    // Convert httparse headers + body into a `http_types::Response` type.
+    let version = httparse_res.version;
+    let version = version.ok_or_else(|| format_err!("No version found"))?;
+    ensure_eq!(version, 1, "Unsupported HTTP version");
+
+    let mut res = Response::new(StatusCode::try_from(code)?);
+    for header in httparse_res.headers.iter() {
+        res.append_header(header.name, std::str::from_utf8(header.value)?);
+    }
+
+    if res.header(DATE).is_none() {
+        let date = fmt_http_date(std::time::SystemTime::now());
+        res.insert_header(DATE, &format!("date: {}\r\n", date)[..]);
+    }
+
+    let content_length = res.header(CONTENT_LENGTH);
+    let transfer_encoding = res.header(TRANSFER_ENCODING);
+
+    ensure!(
+        content_length.is_none() || transfer_encoding.is_none(),
+        "Unexpected Content-Length header"
+    );
+
+    if let Some(encoding) = transfer_encoding {
+        if encoding.last().as_str() == "chunked" {
+            let trailers_sender = res.send_trailers();
+            let reader = buf_read_fn(ChunkedDecoder::new(reader, trailers_sender));
+            res.set_body(Body::from_reader(reader, None));
+
+            // Return the response.
+            return Ok(res);
+        }
+    }
+
+    // Check for Content-Length.
+    if let Some(len) = content_length {
+        let len = len.last().as_str().parse::<usize>()?;
+        res.set_body(Body::from_reader(reader.take(len as u64), Some(len)));
+    }
+
+    // Return the response.
+    Ok(res)
+}
+
+/// Decode an HTTP response on the client.
 pub async fn decode_inner<'a, R>(
     reader: R,
 ) -> http_types::Result<(
